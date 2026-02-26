@@ -51,7 +51,8 @@ def main():
     args   = parse_args()
     setup_environment()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    n_gpus = torch.cuda.device_count()
+    print(f"Device: {device}  |  GPUs available: {n_gpus}")
 
     if args.smoke_test:
         print("\n--- Smoke test mode (2 epochs) ---")
@@ -64,6 +65,8 @@ def main():
         cfg = yaml.safe_load(f)
 
     tr = cfg["training"]
+    # num_workers: YAML'dan oku, yoksa dataset.py default'u (4) kullan
+    num_workers = tr.get("num_workers", 4)
     train_loader, val_loader, test_loader = make_dataloaders(
         h5_path          = args.data,
         batch_size       = tr["batch_size"],
@@ -73,11 +76,15 @@ def main():
         critical_oversample_factor = tr["critical_oversampling"]["factor"],
         augment          = True,
         spin_flip        = True,
-        num_workers      = 0,   # 0 = main process only, faster on CPU
+        num_workers      = num_workers,
         seed             = tr["seed"],
     )
 
-    model   = IsingCNN()
+    model = IsingCNN()
+    # Çift GPU varsa DataParallel ile otomatik paralel eğitim
+    if n_gpus > 1:
+        print(f"  → DataParallel aktif: {n_gpus} GPU kullanılıyor")
+        model = torch.nn.DataParallel(model)
     trainer = Trainer.from_yaml(model, train_loader, val_loader,
                                 cfg_path=args.config, device=device)
     history = trainer.fit()
