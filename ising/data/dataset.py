@@ -171,14 +171,14 @@ def stratified_split(
 
 def make_dataloaders(
     h5_path: str,
-    batch_size: int = 128,
+    batch_size: int = 256,          # Kaggle dual-GPU: 2x GPU → 2x batch
     train_frac: float = 0.70,
     val_frac:   float = 0.15,
     critical_strip: Optional[Tuple[float, float]] = (2.15, 2.40),
     critical_oversample_factor: int = 3,
     augment: bool = True,
     spin_flip: bool = True,
-    num_workers: int = 0,   # 0 = main process only (Kaggle/Colab compatible)
+    num_workers: int = 4,           # 4 paralel worker → disk I/O darboğazını kaldır
     seed: int = 42,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
@@ -226,18 +226,34 @@ def make_dataloaders(
         replacement=True,
     )
 
+    # num_workers > 0 ise persistent_workers ile worker spawn maliyeti sıfırlanır
+    _use_workers = num_workers > 0
+    _pin         = torch.cuda.is_available()   # GPU varsa RAM→VRAM transferini hızlandır
+
     train_loader = DataLoader(
         train_ds, batch_size=batch_size,
-        sampler=sampler, num_workers=num_workers,
-        pin_memory=torch.cuda.is_available(), drop_last=True,
+        sampler=sampler,
+        num_workers=num_workers,
+        pin_memory=_pin,
+        persistent_workers=_use_workers,   # worker'ları epoch aralarında öldürme
+        prefetch_factor=2 if _use_workers else None,  # sonraki batch'i önceden yükle
+        drop_last=True,
     )
     val_loader = DataLoader(
         val_ds, batch_size=batch_size,
-        shuffle=False, num_workers=num_workers,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=_pin,
+        persistent_workers=_use_workers,
+        prefetch_factor=2 if _use_workers else None,
     )
     test_loader = DataLoader(
         test_ds, batch_size=batch_size,
-        shuffle=False, num_workers=num_workers,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=_pin,
+        persistent_workers=_use_workers,
+        prefetch_factor=2 if _use_workers else None,
     )
 
     return train_loader, val_loader, test_loader

@@ -169,7 +169,10 @@ def confusion_sweep(
         criterion = nn.CrossEntropyLoss()
 
         ds_tr = TensorDataset(cnn_tr, phys_tr, labels_tr)
-        loader = DataLoader(ds_tr, batch_size=batch_size, shuffle=True)
+        # NOT: veriler GPU tensor'u olduğundan num_workers=0 zorunlu;
+        # pin_memory de uygulanamaz (zaten device'ta). drop_last kararlı batch boyutu sağlar.
+        loader = DataLoader(ds_tr, batch_size=batch_size, shuffle=True,
+                            num_workers=0, pin_memory=False, drop_last=True)
 
         model.train()
         for _ in range(head_epochs):
