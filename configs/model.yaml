@@ -35,9 +35,10 @@ model:
 # ---------------------------------------------------------------
 training:
   epochs: 100
-  batch_size: 128
+  batch_size: 256        # Kaggle dual-GPU: 2x GPU → 2x batch
   seed: 42
-  num_workers: 0   # 0 = main process DataLoader (Kaggle/Colab compatible)
+  num_workers: 4         # 4 parallel workers for data loading
+  augment: false         # disable augmentation initially for speed; enable after ~80% acc
 
   optimizer:
     name: "AdamW"

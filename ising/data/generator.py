@@ -5,17 +5,12 @@ Dataset generation orchestrator for the 2D Ising Model.
 
 Runs the full simulation pipeline:
     1. Build temperature grid (coarse + dense near Tc)
-    2. For each temperature: thermalize → estimate tau_int → collect samples
+    2. For each temperature: thermalize → collect samples with fixed spacing
     3. Compute per-config labels and ensemble observables
     4. Save everything to a compressed HDF5 file
 
 Usage (via script):
     python scripts/generate_dataset.py --config configs/simulation.yaml
-
-Or directly:
-    from ising.data.generator import DatasetGenerator
-    gen = DatasetGenerator.from_yaml("configs/simulation.yaml")
-    gen.run(L=64)
 """
 
 import time
@@ -27,12 +22,10 @@ import yaml
 
 from ising.simulation.ca_ising import IsingCA
 from ising.simulation.thermalization import smart_init, thermalize
-from ising.simulation.autocorrelation import measure_tau_int
 from ising.simulation.observables import (
     build_cnn_input,
     ensemble_observables,
     per_config_label,
-    fss_corrected_phase_label,
 )
 
 
@@ -75,13 +68,11 @@ class DatasetGenerator:
     n_thermalize         : burn-in sweeps (away from Tc)
     n_thermalize_critical: burn-in sweeps near Tc
     critical_window      : |T - Tc| threshold for extended thermalization
-    spacing_default      : fallback spacing if tau_int estimation is skipped
-    n_autocorr_sweeps    : sweeps used for tau_int measurement
+    spacing              : sweeps between consecutive snapshots
     output_path_template : path with {L} placeholder, e.g. "data/raw/J1_L{L}.h5"
     compression          : HDF5 compression filter
     compression_opts     : compression level
     seed                 : random seed
-    estimate_tau         : whether to measure tau_int before sampling
     verbose              : print progress
     """
 
@@ -89,16 +80,14 @@ class DatasetGenerator:
         self,
         J: float = 1.0,
         n_samples: int = 500,
-        n_thermalize: int = 10_000,
-        n_thermalize_critical: int = 50_000,
+        n_thermalize: int = 2_000,
+        n_thermalize_critical: int = 8_000,
         critical_window: float = 0.3,
-        spacing_default: int = 20,
-        n_autocorr_sweeps: int = 3_000,
+        spacing: int = 10,
         output_path_template: str = "data/raw/J{J_int}_L{L}_snapshots.h5",
         compression: str = "gzip",
         compression_opts: int = 4,
         seed: int = 42,
-        estimate_tau: bool = True,
         verbose: bool = True,
     ):
         self.J                     = J
@@ -106,13 +95,11 @@ class DatasetGenerator:
         self.n_thermalize          = n_thermalize
         self.n_thermalize_critical = n_thermalize_critical
         self.critical_window       = critical_window
-        self.spacing_default       = spacing_default
-        self.n_autocorr_sweeps     = n_autocorr_sweeps
+        self.spacing               = spacing
         self.output_path_template  = output_path_template
         self.compression           = compression
         self.compression_opts      = compression_opts
         self.seed                  = seed
-        self.estimate_tau          = estimate_tau
         self.verbose               = verbose
 
         self.Tc = (2.0 * J) / np.log(1.0 + np.sqrt(2.0))
@@ -130,7 +117,6 @@ class DatasetGenerator:
         sim = cfg["simulation"]
         mc  = sim["mc"]
         out = sim["output"]
-        T   = sim["temperature"]
 
         return cls(
             J                     = sim["J"],
@@ -138,8 +124,7 @@ class DatasetGenerator:
             n_thermalize          = mc["n_thermalize"],
             n_thermalize_critical = mc["n_thermalize_critical"],
             critical_window       = mc["critical_window"],
-            spacing_default       = mc["spacing_default"],
-            n_autocorr_sweeps     = mc["n_autocorr_sweeps"],
+            spacing               = mc["spacing_default"],
             output_path_template  = out["path"],
             compression           = out.get("compression", "gzip"),
             compression_opts      = out.get("compression_opts", 4),
@@ -185,7 +170,7 @@ class DatasetGenerator:
             print(f"\n{'='*60}")
             print(f"Dataset generation: J={self.J}, L={L}, Tc={self.Tc:.4f}")
             print(f"Temperatures: {n_T} points in [{temperatures[0]:.3f}, {temperatures[-1]:.3f}]")
-            print(f"Samples/T: {self.n_samples}")
+            print(f"Samples/T: {self.n_samples}  |  spacing: {self.spacing} sweeps")
             print(f"Output: {out_path}")
             print(f"{'='*60}\n")
 
@@ -227,13 +212,11 @@ class DatasetGenerator:
             ens_C   = ens_grp.create_dataset("C",   shape=(n_T,), dtype=np.float32)
             ens_U4  = ens_grp.create_dataset("U4",  shape=(n_T,), dtype=np.float32)
             ens_E   = ens_grp.create_dataset("E",   shape=(n_T,), dtype=np.float32)
-            ens_tau = ens_grp.create_dataset("tau_int", shape=(n_T,), dtype=np.float32)
 
             # --- main loop ---
             global_idx = 0
             for t_idx, T in enumerate(temperatures):
                 t0 = time.time()
-                beta = 1.0 / T
                 near_tc = abs(T - self.Tc) < self.critical_window
 
                 if self.verbose:
@@ -241,43 +224,24 @@ class DatasetGenerator:
 
                 # 1. Smart init + thermalize
                 smart_init(ca, T)
-                therm_info = thermalize(
+                n_therm = self.n_thermalize_critical if near_tc else self.n_thermalize
+                thermalize(
                     ca, T,
-                    n_sweeps_default   = self.n_thermalize,
+                    n_sweeps_default   = n_therm,
                     n_sweeps_critical  = self.n_thermalize_critical,
                     critical_window    = self.critical_window,
                     verbose            = False,
                 )
 
-                # 2. Estimate tau_int
-                if self.estimate_tau:
-                    tau_result = measure_tau_int(
-                        ca, T,
-                        n_measure_sweeps = self.n_autocorr_sweeps,
-                        verbose          = False,
-                    )
-                    spacing = tau_result["spacing"]
-                    tau_val = tau_result["tau_int"]
-                else:
-                    spacing = self.spacing_default
-                    tau_val = float("nan")
-
-                if self.verbose:
-                    print(
-                        f"therm={'OK' if therm_info['converged'] else 'MAX':3s}  "
-                        f"tau={tau_val:5.1f}  spacing={spacing:3d}  ",
-                        end="", flush=True,
-                    )
-
-                # 3. Collect independent samples
+                # 2. Collect independent samples with fixed spacing
                 configs = ca.sample(
                     T           = T,
                     n_samples   = self.n_samples,
-                    spacing     = spacing,
+                    spacing     = self.spacing,
                     n_thermalize= 0,   # already thermalized
                 )
 
-                # 4. Compute per-config labels and CNN inputs
+                # 3. Compute per-config labels and CNN inputs
                 start = global_idx
                 end   = global_idx + self.n_samples
 
@@ -290,7 +254,7 @@ class DatasetGenerator:
                     ds_m[start + k]     = lbl["m"]
                     ds_E[start + k]     = lbl["E"]
 
-                # 5. Ensemble observables
+                # 4. Ensemble observables
                 ens_obs = ensemble_observables(configs, T=T, J=self.J)
                 ens_T[t_idx]   = T
                 ens_m[t_idx]   = ens_obs["m_mean"]
@@ -298,7 +262,6 @@ class DatasetGenerator:
                 ens_C[t_idx]   = ens_obs["C"]
                 ens_U4[t_idx]  = ens_obs["U4"]
                 ens_E[t_idx]   = ens_obs["E_mean"]
-                ens_tau[t_idx] = tau_val
 
                 global_idx += self.n_samples
 

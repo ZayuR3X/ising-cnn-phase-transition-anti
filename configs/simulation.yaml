@@ -33,10 +33,10 @@ simulation:
   # ---------------------------------------------------------------
   mc:
     # Thermalization sweeps (away from Tc)
-    n_thermalize: 10000
+    n_thermalize: 2000          # reduced from 10000 — Numba JIT makes this sufficient
 
     # Thermalization sweeps near Tc (|T - Tc| < critical_window)
-    n_thermalize_critical: 50000
+    n_thermalize_critical: 8000  # reduced from 50000
 
     # Temperature window around Tc that triggers extended thermalization
     critical_window: 0.3
@@ -44,12 +44,8 @@ simulation:
     # Independent samples per temperature point
     n_samples: 500
 
-    # Sweeps between samples (will be overridden by 2*tau_int if autocorr module available)
-    # Default conservative spacing
-    spacing_default: 20
-
-    # Autocorrelation estimation: number of sweeps for tau_int measurement
-    n_autocorr_sweeps: 5000
+    # Sweeps between samples (fixed — no tau_int estimation)
+    spacing_default: 10
 
   # ---------------------------------------------------------------
   # Initialization

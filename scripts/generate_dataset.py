@@ -9,7 +9,7 @@ Examples
 python scripts/generate_dataset.py
 
 # Custom lattice size:
-python scripts/generate_dataset.py --L 32
+python scripts/generate_dataset.py --L 64
 
 # Quick smoke test (small, fast):
 python scripts/generate_dataset.py --smoke-test
@@ -24,7 +24,6 @@ import argparse
 import numpy as np
 from pathlib import Path
 
-# Kaggle/Colab: ensure project root is importable regardless of CWD
 sys.path.insert(0, ".")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -32,7 +31,7 @@ from ising.data.generator import DatasetGenerator, build_temperature_grid
 
 
 def setup_environment():
-    """Create required output directories (Kaggle/Colab compatibility)."""
+    """Create required output directories."""
     for d in ["data/raw", "checkpoints", "logs", "figures"]:
         os.makedirs(d, exist_ok=True)
 
@@ -43,7 +42,6 @@ def parse_args():
     )
     parser.add_argument(
         "--config", default="configs/simulation.yaml",
-        help="Path to simulation YAML config (default: configs/simulation.yaml)"
     )
     parser.add_argument(
         "--L", type=int, default=None,
@@ -51,7 +49,7 @@ def parse_args():
     )
     parser.add_argument(
         "--smoke-test", action="store_true",
-        help="Quick test: L=16, few temperatures, few samples"
+        help="Quick test: L=16, 5 temperatures, 10 samples each (~30s)"
     )
     return parser.parse_args()
 
@@ -61,9 +59,6 @@ def main():
     setup_environment()
 
     if args.smoke_test:
-        # ----------------------------------------------------------------
-        # Smoke test: tiny dataset, runs in ~30 seconds on CPU
-        # ----------------------------------------------------------------
         print("Running smoke test (L=16, 5 temperatures, 10 samples each)...")
         gen = DatasetGenerator(
             J                     = 1.0,
@@ -71,11 +66,9 @@ def main():
             n_thermalize          = 500,
             n_thermalize_critical = 1_000,
             critical_window       = 0.3,
-            spacing_default       = 5,
-            n_autocorr_sweeps     = 200,
+            spacing               = 5,
             output_path_template  = "data/raw/smoke_test_L{L}.h5",
             seed                  = 42,
-            estimate_tau          = True,
             verbose               = True,
         )
         temperatures = np.array([1.5, 2.0, 2.269, 2.8, 3.5])
@@ -84,9 +77,7 @@ def main():
         _verify_hdf5(out)
         return
 
-    # ----------------------------------------------------------------
     # Full run from config
-    # ----------------------------------------------------------------
     gen = DatasetGenerator.from_yaml(args.config)
 
     import yaml
@@ -102,7 +93,7 @@ def main():
         gen.run_from_config(L=L, cfg_path=args.config)
 
 
-def _verify_hdf5(path: Path):
+def _verify_hdf5(path):
     """Basic integrity check on a generated HDF5 file."""
     import h5py
     print(f"\nVerifying {path} ...")
@@ -113,7 +104,6 @@ def _verify_hdf5(path: Path):
         print(f"  T range    : [{hf['temperature'][:].min():.3f}, "
               f"{hf['temperature'][:].max():.3f}]")
         print(f"  phase dist : {dict(zip(*np.unique(hf['phase'][:], return_counts=True)))}")
-        print(f"  Ensemble T : {hf['ensemble/T'][:].tolist()}")
         print("  OK")
 
 

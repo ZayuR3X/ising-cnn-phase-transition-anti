@@ -65,8 +65,9 @@ def main():
         cfg = yaml.safe_load(f)
 
     tr = cfg["training"]
-    # num_workers: YAML'dan oku, yoksa dataset.py default'u (4) kullan
+    # num_workers ve augment YAML'dan okunur
     num_workers = tr.get("num_workers", 4)
+    augment     = tr.get("augment", False)   # False: hızlı başlat, sonra aç
     train_loader, val_loader, test_loader = make_dataloaders(
         h5_path          = args.data,
         batch_size       = tr["batch_size"],
@@ -74,9 +75,10 @@ def main():
         val_frac         = tr["data_split"]["val"],
         critical_strip   = tuple(tr["data_split"]["critical_strip"]),
         critical_oversample_factor = tr["critical_oversampling"]["factor"],
-        augment          = True,
-        spin_flip        = True,
+        augment          = augment,
+        spin_flip        = augment,   # spin_flip ile augment birlikte açılır/kapanır
         num_workers      = num_workers,
+        cache            = True,       # tüm veriyi RAM'e yükle — en büyük hız kazanımı
         seed             = tr["seed"],
     )
 
@@ -130,7 +132,8 @@ def _smoke_test(device: torch.device):
         critical_oversample_factor = 1,
         augment          = False,
         spin_flip        = False,
-        num_workers      = 0,
+        num_workers      = 0,   # smoke test: worker spawn overhead > kazancı
+        cache            = True,
     )
 
     model     = IsingCNN()
